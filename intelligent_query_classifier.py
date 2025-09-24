@@ -62,7 +62,7 @@ class IntelligentQueryClassifier:
             raise ValueError("Missing OPENAI_API_KEY or OPENAI_BASE_URL environment variables")
             
         self.client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o-2024-08-06")
+        self.model = os.getenv("OPENAI_MODEL")
         
         # Fallback patterns for when AI is unavailable
         self.fallback_patterns = {

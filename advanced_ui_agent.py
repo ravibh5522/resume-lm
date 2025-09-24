@@ -33,7 +33,7 @@ class AdvancedUIAgent:
             raise ValueError("Missing OPENAI_API_KEY or OPENAI_BASE_URL environment variables")
             
         self.client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o-2024-08-06")
+        self.model = os.getenv("OPENAI_MODEL")
         
         # UI modification patterns
         self.ui_keywords = {
