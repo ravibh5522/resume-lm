@@ -10,6 +10,9 @@ from models import (
     Education, Project, DataGatheringResponse, StructuredResumeData,
     ResumeGeneratorResponse
 )
+from ui_modification_agent import UIModificationAgent, create_ui_modification_prompt
+from advanced_ui_agent import AdvancedUIAgent
+from pure_ai_classifier import PureAIQueryClassifier, PureAIFunctionManager, QueryType
 
 load_dotenv()
 
@@ -98,6 +101,15 @@ class DataGatheringAgent:
         self.openai_client = openai_client
         self.system_prompt = """You are a professional resume consultant assistant. Your role is to gather comprehensive information from users to create outstanding resumes.
 
+CRITICAL RULE FOR EXISTING RESUME DATA:
+If the user already has resume data (shown in context), YOU MUST PRESERVE ALL EXISTING INFORMATION unless specifically asked to change it.
+
+When making modifications:
+1. ALWAYS include ALL existing data in your response
+2. Only change the specific fields requested by the user
+3. Never return empty arrays or null values for existing data
+4. Preserve experience entries, education, skills, projects, certifications, languages
+
 CONVERSATION FLOW:
 1. Ask targeted questions to collect user information
 2. Be conversational and helpful
@@ -107,8 +119,13 @@ KEY TRIGGERS FOR GENERATION:
 - User explicitly says "generate", "create resume", "make resume"
 - User provides complete random/sample data request
 - You have collected sufficient basic information
-- User requests modifications to existing resume (change font, layout, styling, format, colors, etc.)
-- User asks to update/modify/change any aspect of an already generated resume
+- User requests ANY modification to existing resume data (name change, phone update, etc.)
+
+IMPORTANT FOR MODIFICATIONS:
+- If user asks to change ANY existing field (name, phone, email, etc.), set ready_to_generate=True
+- If user asks to modify layout/style/format, set ready_to_generate=True  
+- If user asks to add/remove experience, education, skills, set ready_to_generate=True
+- ANY change request should trigger resume regeneration with the updated data
 
 You should ask targeted questions to collect:
 1. Personal Information (name, email, phone, location, LinkedIn, GitHub, website)
@@ -181,13 +198,37 @@ When ready to generate, be clear about the next steps."""
   "needs_more_info": true
 }
 
-Set ready_to_generate to true and needs_more_info to false only when you have sufficient information for a complete resume."""
+CRITICAL: If existing resume data was provided in context, you MUST include ALL of it in collected_data, even if unchanged. Only modify the specific fields requested by the user.
+
+Set ready_to_generate to true and needs_more_info to false when:
+1. You have sufficient information for a complete resume, OR
+2. User requests ANY modification to existing resume data (name change, contact update, etc.), OR  
+3. User asks to change layout, style, or format
+
+For modifications: Always set ready_to_generate=true even for small changes like name updates."""
     
-    async def process_message(self, message: str, chat_history: List[ChatMessage]) -> tuple[str, Optional[ResumeData]]:
+    async def process_message(self, message: str, chat_history: List[ChatMessage], existing_resume_data: Optional[ResumeData] = None) -> tuple[str, Optional[ResumeData]]:
         """Process user message and return response and optional resume data"""
         
         # Convert chat history to OpenAI format
         messages = [{"role": "system", "content": self.system_prompt}]
+        
+        # Add existing resume context if available
+        if existing_resume_data:
+            context_message = f"""
+EXISTING RESUME DATA (preserve unless specifically asked to change):
+Name: {existing_resume_data.profile.name}
+Email: {existing_resume_data.profile.email}
+Phone: {existing_resume_data.profile.phone}
+Location: {existing_resume_data.profile.location}
+Experience: {len(existing_resume_data.experience)} entries
+Education: {len(existing_resume_data.education)} entries
+Skills: {len(existing_resume_data.skills)} items
+Projects: {len(existing_resume_data.projects)} items
+
+IMPORTANT: Only modify the specific fields mentioned by the user. Keep all other data unchanged.
+"""
+            messages.append({"role": "system", "content": context_message})
         
         for chat in chat_history[-10:]:  # Last 10 messages for context
             messages.append({
@@ -211,18 +252,22 @@ Set ready_to_generate to true and needs_more_info to false only when you have su
                 
                 # Check if we should generate resume
                 if collected_data and not needs_more_info and collected_data.ready_to_generate:
-                    # Convert StructuredResumeData to ResumeData
-                    resume_data = ResumeData(
-                        profile=collected_data.profile,
-                        summary=collected_data.summary,
-                        experience=collected_data.experience,
-                        education=collected_data.education,
-                        skills=collected_data.skills,
-                        projects=collected_data.projects,
-                        certifications=collected_data.certifications,
-                        languages=collected_data.languages
-                    )
-                    return "Perfect! I have all the information needed. I'm now generating your professional resume with modern styling and visual elements. Please wait a moment...", resume_data
+                    # If we have existing data, merge with new data
+                    if existing_resume_data:
+                        final_resume_data = self._merge_resume_data(existing_resume_data, collected_data)
+                    else:
+                        # Convert StructuredResumeData to ResumeData
+                        final_resume_data = ResumeData(
+                            profile=collected_data.profile,
+                            summary=collected_data.summary,
+                            experience=collected_data.experience,
+                            education=collected_data.education,
+                            skills=collected_data.skills,
+                            projects=collected_data.projects,
+                            certifications=collected_data.certifications,
+                            languages=collected_data.languages
+                        )
+                    return "Perfect! I have all the information needed. I'm now generating your professional resume with modern styling and visual elements. Please wait a moment...", final_resume_data
                 
                 return message_text, None
         except Exception as e:
@@ -284,6 +329,62 @@ Set ready_to_generate to true and needs_more_info to false only when you have su
                 print(f"Error creating basic resume data: {e}")
         
         return response, None
+    
+    def _merge_resume_data(self, existing: ResumeData, new_data: 'StructuredResumeData') -> ResumeData:
+        """Merge existing resume data with new updates, preserving unchanged fields"""
+        
+        # Start with existing data
+        merged = ResumeData(
+            profile=existing.profile.model_copy(),
+            summary=existing.summary,
+            experience=existing.experience.copy(),
+            education=existing.education.copy(),
+            skills=existing.skills.copy(),
+            projects=existing.projects.copy(),
+            certifications=existing.certifications.copy(),
+            languages=existing.languages.copy()
+        )
+        
+        # Update only non-empty fields from new data
+        if new_data.profile:
+            if new_data.profile.name and new_data.profile.name.strip():
+                merged.profile.name = new_data.profile.name
+            if new_data.profile.email and new_data.profile.email.strip():
+                merged.profile.email = new_data.profile.email
+            if new_data.profile.phone and new_data.profile.phone.strip():
+                merged.profile.phone = new_data.profile.phone
+            if new_data.profile.location and new_data.profile.location.strip():
+                merged.profile.location = new_data.profile.location
+            if new_data.profile.linkedin and new_data.profile.linkedin.strip():
+                merged.profile.linkedin = new_data.profile.linkedin
+            if new_data.profile.github and new_data.profile.github.strip():
+                merged.profile.github = new_data.profile.github
+            if new_data.profile.website and new_data.profile.website.strip():
+                merged.profile.website = new_data.profile.website
+        
+        if new_data.summary and new_data.summary.strip():
+            merged.summary = new_data.summary
+            
+        # For lists, only update if new data is provided
+        if new_data.experience and len(new_data.experience) > 0:
+            merged.experience = new_data.experience
+            
+        if new_data.education and len(new_data.education) > 0:
+            merged.education = new_data.education
+            
+        if new_data.skills and len(new_data.skills) > 0:
+            merged.skills = new_data.skills
+            
+        if new_data.projects and len(new_data.projects) > 0:
+            merged.projects = new_data.projects
+            
+        if new_data.certifications and len(new_data.certifications) > 0:
+            merged.certifications = new_data.certifications
+            
+        if new_data.languages and len(new_data.languages) > 0:
+            merged.languages = new_data.languages
+        
+        return merged
     
     def extract_resume_data(self, response: str) -> Optional[ResumeData]:
         """Extract resume data if the agent signals it's ready (fallback method)"""
@@ -554,19 +655,31 @@ class AIAgentOrchestrator:
         self.openai_client = OpenAIClient()
         self.data_gathering_agent = DataGatheringAgent(self.openai_client)
         self.resume_generator_agent = ResumeGeneratorAgent(self.openai_client)
+        self.ui_modification_agent = UIModificationAgent()
+        self.advanced_ui_agent = AdvancedUIAgent()
+        # Pure AI classification system - no fallback
+        self.query_classifier = PureAIQueryClassifier()
+        self.function_manager = PureAIFunctionManager()
     
     async def process_chat_message(self, message: str, chat_history: List[ChatMessage], existing_resume_data: Optional[ResumeData] = None) -> tuple[str, Optional[ResumeData]]:
-        """Process chat message and return response and optional resume data if ready"""
+        """Process chat message using intelligent query classification"""
         
-        # Check if this is a modification request for existing resume
-        modification_keywords = ['change', 'modify', 'update', 'font', 'style', 'color', 'layout', 'format', 'make it', 'can you']
-        is_modification_request = any(keyword in message.lower() for keyword in modification_keywords)
+        # Build context for classification
+        context = {
+            "has_data": existing_resume_data is not None,
+            "data_completeness": self._assess_data_completeness(existing_resume_data) if existing_resume_data else 0
+        }
         
-        if existing_resume_data and existing_resume_data.profile.name and is_modification_request:
-            # This is a modification request for an existing resume
-            return f"Perfect! I understand you want to modify your existing resume. I'm regenerating it with your requested changes: '{message}'. Please wait a moment...", existing_resume_data
+        # Use pure AI classification - no regex fallback
+        route_result = await self.function_manager.route_query(message, context)
+        classification = route_result["classification"]
+        action_result = route_result["result"]
         
-        response_text, resume_data = await self.data_gathering_agent.process_message(message, chat_history)
+        print(f"� Pure AI classified as: {classification.query_type.value} (confidence: {classification.confidence:.2f})")
+        
+        # Route based on intelligent classification - ALL requests go through data gathering agent
+        # The agent will handle the actual logic and responses properly
+        response_text, resume_data = await self.data_gathering_agent.process_message(message, chat_history, existing_resume_data)
         
         if resume_data:
             # Clean up the response if it contains old-style markers
@@ -579,6 +692,50 @@ class AIAgentOrchestrator:
         
         return response_text, None
     
+    def _assess_data_completeness(self, resume_data: ResumeData) -> float:
+        """Assess how complete the resume data is (0.0 to 1.0)"""
+        if not resume_data:
+            return 0.0
+        
+        completeness_score = 0.0
+        
+        # Basic profile info (40% weight)
+        profile_fields = [resume_data.profile.name, resume_data.profile.email, resume_data.profile.phone, resume_data.profile.location]
+        profile_score = sum(1 for field in profile_fields if field) / len(profile_fields)
+        completeness_score += profile_score * 0.4
+        
+        # Experience (30% weight)  
+        if resume_data.experience:
+            completeness_score += 0.3
+        
+        # Skills (15% weight)
+        if resume_data.skills:
+            completeness_score += 0.15
+        
+        # Education (10% weight)
+        if resume_data.education:
+            completeness_score += 0.1
+        
+        # Summary (5% weight)
+        if resume_data.summary:
+            completeness_score += 0.05
+        
+        return completeness_score
+    
     async def generate_resume_markdown(self, resume_data: ResumeData, user_query: str = "") -> str:
-        """Generate resume markdown from structured data with enhanced performance"""
-        return await self.resume_generator_agent.generate_resume(resume_data, user_query)
+        """Generate resume markdown with intelligent UI modifications"""
+        
+        # First, generate the base resume
+        markdown_resume = await self.resume_generator_agent.generate_resume(resume_data, user_query)
+        
+        # Check if the user query contains UI modifications using pure AI classification
+        if user_query:
+            classification = await self.query_classifier.classify_query(user_query)
+            
+            if self.query_classifier.is_ui_only_request(classification):
+                # Apply advanced UI modifications while preserving all content
+                markdown_resume = await self.advanced_ui_agent.apply_ui_modifications(
+                    markdown_resume, user_query, resume_data
+                )
+        
+        return markdown_resume
