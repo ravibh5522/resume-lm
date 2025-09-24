@@ -11,8 +11,7 @@ RUN apt-get update && apt-get install -y \
     libpangoft2-1.0-0 \
     libfontconfig1 \
     libcairo2 \
-    libgdk-pixbuf2.0-0 \
-    libgtk-3-0 \
+    libgdk-pixbuf-2.0-0 \
     libglib2.0-0 \
     libgobject-2.0-0 \
     shared-mime-info \
