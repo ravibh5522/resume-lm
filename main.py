@@ -27,6 +27,14 @@ from resume_modifier import ResumeModifier
 
 load_dotenv()
 
+# Get environment variables
+ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = int(os.getenv("PORT", "8000"))
+
+print(f"🚀 Starting AI Resume Generator in {ENVIRONMENT} mode...")
+print(f"📍 Server will run on {HOST}:{PORT}")
+
 # Initialize FastAPI app
 app = FastAPI(
     title="AI Resume Generator",
@@ -202,8 +210,12 @@ async def root():
                         sessionId = data.session_id;
                         document.getElementById('status').textContent = `Session: ${sessionId}`;
                         
-                        // Connect WebSocket
-                        ws = new WebSocket(`ws://localhost:8000/ws/${sessionId}`);
+                        // Connect WebSocket - dynamically detect host and protocol
+                        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                        const host = window.location.host;
+                        const wsUrl = `${protocol}//${host}/ws/${sessionId}`;
+                        console.log(`Connecting to WebSocket: ${wsUrl}`);
+                        ws = new WebSocket(wsUrl);
                         
                         ws.onopen = function(event) {
                             document.getElementById('status').textContent = `Connected - Session: ${sessionId}`;
@@ -605,4 +617,4 @@ async def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("main:app", host=HOST, port=PORT, reload=(ENVIRONMENT == "development"))
