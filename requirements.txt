@@ -17,8 +17,9 @@ passlib[bcrypt]>=1.7.4
 # Database and caching
 redis>=5.2.0
 
-# PDF generation dependencies
+# PDF and DOCX generation dependencies
 weasyprint>=62.3
+python-docx>=1.1.0
 markdown>=3.7
 markdown2>=2.5.0
 

@@ -68,10 +68,20 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str
 
+class DocxGenerationRequest(BaseModel):
+    markdown: str
+    session_id: str
+
 class ChatResponse(BaseModel):
     message: str
     session_id: str
     timestamp: datetime = Field(default_factory=datetime.now)
+
+class DocxResponse(BaseModel):
+    docx_base64: Optional[str]
+    session_id: str
+    success: bool = True
+    error: Optional[str] = None
 
 class ResumeUpdateEvent(BaseModel):
     session_id: str

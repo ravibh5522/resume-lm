@@ -17,12 +17,22 @@ from dotenv import load_dotenv
 # Import our modules
 from models import (
     ChatRequest, ChatResponse, ChatMessage, ChatRole, 
-    ResumeData, SessionData, ResumeUpdateEvent
+    ResumeData, SessionData, ResumeUpdateEvent,
+    DocxGenerationRequest, DocxResponse
 )
 from session_manager import SessionManager
 from agents import AIAgentOrchestrator
 from resume_generator import ResumeGenerationService
 from pdf_generator_optimized import OptimizedPDFGenerator
+from pdf_generator_enhanced import EnhancedPdfGenerator
+from ultimate_parser import UltimatePdfGenerator
+from compact_parser import CompactPdfGenerator
+from auto_fit_generator import AutoFitPdfGenerator
+from docx_generator import ProfessionalDocxGenerator
+from docx_generator_enhanced import EnhancedDocxGenerator
+from compact_docx_generator import CompactDocxGenerator
+from auto_fit_docx_generator import AutoFitDocxGenerator
+from unified_parser import UnifiedResumeParser
 from resume_modifier import ResumeModifier
 
 load_dotenv()
@@ -51,11 +61,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize services
+# Initialize services with AUTO-FIT generators - automatic font scaling for single-page layout
 session_manager = SessionManager()
 ai_orchestrator = AIAgentOrchestrator()
 resume_service = ResumeGenerationService(session_manager)
-pdf_generator = OptimizedPDFGenerator()
+pdf_generator = AutoFitPdfGenerator()        # AUTO-FIT PDF - dynamic font scaling for single-page
+docx_generator = AutoFitDocxGenerator()      # AUTO-FIT DOCX - adaptive sizing for Word documents
+unified_parser = UnifiedResumeParser()      # For format conversion
 resume_modifier = ResumeModifier()
 
 # WebSocket connection manager
@@ -166,9 +178,71 @@ async def root():
                 align-self: flex-end;
             }
             .chat-input button:hover { background: #1976d2; }
-            .resume-preview { flex: 1; overflow-y: auto; border: 1px solid #ddd; background: #fafafa; border-radius: 4px; }
+            
+            /* Format Selection Tabs */
+            .format-tabs {
+                display: flex;
+                margin-bottom: 15px;
+                border-bottom: 2px solid #f0f0f0;
+            }
+            .format-tab {
+                flex: 1;
+                padding: 12px 20px;
+                background: #f8f9fa;
+                border: none;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 600;
+                color: #666;
+                transition: all 0.2s;
+                border-radius: 8px 8px 0 0;
+                margin-right: 2px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+            }
+            .format-tab:last-child { margin-right: 0; }
+            .format-tab.active {
+                background: #2196f3;
+                color: white;
+                border-bottom: 2px solid #2196f3;
+            }
+            .format-tab:hover:not(.active) {
+                background: #e3f2fd;
+                color: #1976d2;
+            }
+            
+            .resume-preview { 
+                flex: 1; 
+                overflow-y: auto; 
+                border: 1px solid #ddd; 
+                background: #fafafa; 
+                border-radius: 4px; 
+                display: block;
+            }
+            .resume-preview.hidden { display: none; }
+            
             .status { padding: 8px 12px; background: #e8f5e8; border-radius: 4px; margin-bottom: 10px; font-size: 13px; }
             h2 { color: #333; margin-bottom: 15px; font-size: 18px; border-bottom: 2px solid #2196f3; padding-bottom: 8px; }
+            
+            /* Download Button */
+            .download-btn {
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                background: #4caf50;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                z-index: 1000;
+                display: none;
+            }
+            .download-btn:hover { background: #45a049; }
+            .download-btn.show { display: block; }
         </style>
     </head>
     <body>
@@ -186,12 +260,36 @@ async def root():
             </div>
             
             <div class="panel">
-                <h2>📄 Resume Preview (A4 PDF)</h2>
-                <div class="resume-preview" id="resumePreview">
+                <h2>📄 Resume Preview</h2>
+                
+                <!-- Format Selection Tabs -->
+                <div class="format-tabs">
+                    <button class="format-tab active" onclick="switchFormat('pdf')" id="pdfTab">
+                        📄 PDF Preview
+                    </button>
+                    <button class="format-tab" onclick="switchFormat('docx')" id="docxTab">
+                        📝 Word Preview
+                    </button>
+                </div>
+                
+                <!-- Download Button -->
+                <button class="download-btn" id="downloadBtn" onclick="downloadResume()">📥 Download</button>
+                
+                <!-- PDF Preview -->
+                <div class="resume-preview" id="pdfPreview">
                     <div style="text-align: center; padding: 40px; color: #666;">
-                        <h3 style="margin-bottom: 20px;">🚀 Your Professional Resume</h3>
-                        <p><em>Your A4 resume will appear here as you chat with the AI...</em></p>
+                        <h3 style="margin-bottom: 20px;">� Professional PDF Resume</h3>
+                        <p><em>Your A4 PDF resume will appear here as you chat with the AI...</em></p>
                         <p style="margin-top: 20px; font-size: 14px;">✨ Modern styling • 📏 A4 format • 🖨️ Print-ready</p>
+                    </div>
+                </div>
+                
+                <!-- DOCX Preview -->
+                <div class="resume-preview hidden" id="docxPreview">
+                    <div style="text-align: center; padding: 40px; color: #666;">
+                        <h3 style="margin-bottom: 20px;">📝 Professional Word Document</h3>
+                        <p><em>Your Word resume preview will appear here...</em></p>
+                        <p style="margin-top: 20px; font-size: 14px;">💼 Professional styling • 📝 Editable format • 🔄 Live updates</p>
                     </div>
                 </div>
             </div>
@@ -200,6 +298,12 @@ async def root():
         <script>
             let ws;
             let sessionId;
+            let currentFormat = 'pdf';
+            let resumeData = {
+                pdf: null,
+                docx: null,
+                markdown: null
+            };
 
             // Initialize WebSocket connection
             function initWebSocket() {
@@ -227,6 +331,11 @@ async def root():
                             const data = JSON.parse(event.data);
                             if (data.type === 'resume_pdf_update') {
                                 updateResumePDFPreview(data.pdf_base64);
+                                if (data.resume_markdown) {
+                                    resumeData.markdown = data.resume_markdown;
+                                }
+                            } else if (data.type === 'resume_docx_update') {
+                                updateResumeDocxPreview(data.docx_base64);
                             } else if (data.type === 'resume_update') {
                                 updateResumePreview(data.resume_markdown);
                             } else if (data.type === 'chat_response') {
@@ -244,6 +353,83 @@ async def root():
                             document.getElementById('status').textContent = 'Connection error. Please refresh.';
                         };
                     });
+            }
+
+            // Format switching functionality
+            function switchFormat(format) {
+                currentFormat = format;
+                
+                // Update tab styles
+                document.querySelectorAll('.format-tab').forEach(tab => {
+                    tab.classList.remove('active');
+                });
+                document.getElementById(format + 'Tab').classList.add('active');
+                
+                // Show/hide previews
+                document.getElementById('pdfPreview').classList.toggle('hidden', format !== 'pdf');
+                document.getElementById('docxPreview').classList.toggle('hidden', format !== 'docx');
+                
+                // Generate DOCX if switching to DOCX and we have markdown data
+                if (format === 'docx' && resumeData.markdown && !resumeData.docx) {
+                    generateDocxFromMarkdown();
+                }
+                
+                // Update download button
+                updateDownloadButton();
+            }
+
+            // Generate DOCX from current markdown
+            function generateDocxFromMarkdown() {
+                if (!resumeData.markdown) return;
+                
+                addMessage('🔄 Converting to Word format...', 'status');
+                
+                fetch('/generate-docx', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        markdown: resumeData.markdown,
+                        session_id: sessionId 
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.docx_base64) {
+                        updateResumeDocxPreview(data.docx_base64);
+                        addMessage('✅ Word format ready!', 'status');
+                    } else {
+                        addMessage('❌ Error generating Word format', 'status');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error generating DOCX:', error);
+                    addMessage('❌ Error generating Word format', 'status');
+                });
+            }
+
+            // Download current format
+            function downloadResume() {
+                if (currentFormat === 'pdf' && resumeData.pdf) {
+                    const link = document.createElement('a');
+                    link.href = `data:application/pdf;base64,${resumeData.pdf}`;
+                    link.download = 'resume.pdf';
+                    link.click();
+                } else if (currentFormat === 'docx' && resumeData.docx) {
+                    const link = document.createElement('a');
+                    link.href = `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${resumeData.docx}`;
+                    link.download = 'resume.docx';
+                    link.click();
+                }
+            }
+
+            // Update download button visibility and text
+            function updateDownloadButton() {
+                const downloadBtn = document.getElementById('downloadBtn');
+                const hasData = (currentFormat === 'pdf' && resumeData.pdf) || 
+                               (currentFormat === 'docx' && resumeData.docx);
+                
+                downloadBtn.classList.toggle('show', hasData);
+                downloadBtn.textContent = currentFormat === 'pdf' ? '📄 Download PDF' : '📝 Download Word';
             }
 
             function handleKeyPress(event) {
@@ -304,18 +490,14 @@ async def root():
             }
 
             function updateResumePDFPreview(pdfBase64) {
-                const preview = document.getElementById('resumePreview');
+                resumeData.pdf = pdfBase64;
+                
+                const preview = document.getElementById('pdfPreview');
                 
                 if (pdfBase64) {
                     // Create PDF viewer with embedded PDF
                     preview.innerHTML = `
-                        <div style="text-align: center; margin-bottom: 10px;">
-                            <a href="data:application/pdf;base64,${pdfBase64}" download="resume.pdf" 
-                               style="background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-bottom: 10px;">
-                                📄 Download PDF Resume
-                            </a>
-                        </div>
-                        <div style="border: 1px solid #ddd; border-radius: 5px; overflow: hidden; height: calc(100vh - 160px); box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+                        <div style="border: 1px solid #ddd; border-radius: 5px; overflow: hidden; height: calc(100vh - 200px); box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
                             <embed src="data:application/pdf;base64,${pdfBase64}" 
                                    type="application/pdf" 
                                    width="100%" 
@@ -327,32 +509,81 @@ async def root():
                         </p>
                     `;
                 } else {
-                    preview.innerHTML = '<p style="color: red;">❌ Error loading PDF preview</p>';
+                    preview.innerHTML = '<p style="color: red; text-align: center; padding: 40px;">❌ Error loading PDF preview</p>';
                 }
+                
+                updateDownloadButton();
+            }
+
+            function updateResumeDocxPreview(docxBase64) {
+                resumeData.docx = docxBase64;
+                
+                const preview = document.getElementById('docxPreview');
+                
+                if (docxBase64) {
+                    // For DOCX, we'll show a preview message and download option since browsers can't embed DOCX
+                    preview.innerHTML = `
+                        <div style="text-align: center; padding: 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white; margin: 20px;">
+                            <h3 style="margin-bottom: 20px; color: white;">📝 Microsoft Word Document Ready!</h3>
+                            <p style="margin-bottom: 25px; opacity: 0.9;">Your professional resume has been generated in Word format.</p>
+                            <button onclick="downloadResume()" style="background: #4CAF50; color: white; border: none; padding: 15px 30px; border-radius: 25px; font-size: 16px; cursor: pointer; box-shadow: 0 4px 8px rgba(0,0,0,0.2); transition: all 0.3s;">
+                                📥 Download Word Document
+                            </button>
+                            <div style="margin-top: 25px; padding: 20px; background: rgba(255,255,255,0.1); border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);">
+                                <h4 style="margin-bottom: 15px; color: white;">📋 Word Document Features:</h4>
+                                <ul style="text-align: left; display: inline-block; opacity: 0.9;">
+                                    <li>✏️ Fully editable in Microsoft Word</li>
+                                    <li>🎨 Professional formatting preserved</li>
+                                    <li>📱 Compatible with Word Online & mobile</li>
+                                    <li>🔄 Easy to customize further</li>
+                                    <li>📧 Perfect for email attachments</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <p style="text-align: center; color: #666; margin-top: 15px; font-size: 12px;">
+                            � Professional Word format • ✏️ Fully editable • � ATS-compatible
+                        </p>
+                    `;
+                } else {
+                    preview.innerHTML = '<p style="color: red; text-align: center; padding: 40px;">❌ Error loading Word preview</p>';
+                }
+                
+                updateDownloadButton();
             }
 
             function updateResumePreview(markdown) {
-                const preview = document.getElementById('resumePreview');
+                resumeData.markdown = markdown;
                 
-                // Simple but working markdown to HTML conversion (fallback)
-                let html = markdown
-                    // Headers
-                    .replace(/^# (.*)$/gm, '<h1 style="color: #1565c0; text-align: center; border-bottom: 3px solid #4caf50; padding-bottom: 10px; margin-bottom: 20px;">$1</h1>')
-                    .replace(/^## (.*)$/gm, '<h2 style="color: #1976d2; margin-top: 25px; margin-bottom: 15px; border-bottom: 2px solid #81c784; padding-bottom: 5px;">$1</h2>')
-                    .replace(/^### (.*)$/gm, '<h3 style="color: #424242; margin-top: 20px; margin-bottom: 10px;">$1</h3>')
+                // If we're currently viewing PDF, update that
+                if (currentFormat === 'pdf') {
+                    const preview = document.getElementById('pdfPreview');
                     
-                    // Horizontal rules
-                    .replace(/^---$/gm, '<hr style="border: none; height: 2px; background: linear-gradient(90deg, #4caf50, #2196f3); margin: 20px 0; border-radius: 1px;">')
+                    // Simple but working markdown to HTML conversion (fallback)
+                    let html = markdown
+                        // Headers
+                        .replace(/^# (.*)$/gm, '<h1 style="color: #1565c0; text-align: center; border-bottom: 3px solid #4caf50; padding-bottom: 10px; margin-bottom: 20px;">$1</h1>')
+                        .replace(/^## (.*)$/gm, '<h2 style="color: #1976d2; margin-top: 25px; margin-bottom: 15px; border-bottom: 2px solid #81c784; padding-bottom: 5px;">$1</h2>')
+                        .replace(/^### (.*)$/gm, '<h3 style="color: #424242; margin-top: 20px; margin-bottom: 10px;">$1</h3>')
+                        
+                        // Horizontal rules
+                        .replace(/^---$/gm, '<hr style="border: none; height: 2px; background: linear-gradient(90deg, #4caf50, #2196f3); margin: 20px 0; border-radius: 1px;">')
+                        
+                        // Convert line breaks to HTML
+                        .replace(/\\n/g, '<br>');
                     
-                    // Convert line breaks to HTML
-                    .replace(/\\n/g, '<br>');
+                    // Apply modern container styling
+                    preview.innerHTML = 
+                        '<div style="font-family: \\'Segoe UI\\', \\'Roboto\\', \\'Helvetica Neue\\', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 900px; margin: 0 auto; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border: 1px solid #e1e5e9;">' +
+                        '<div style="background: white; padding: 25px; border-radius: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.08);">' +
+                        html +
+                        '</div></div>';
+                }
                 
-                // Apply modern container styling
-                preview.innerHTML = 
-                    '<div style="font-family: \\'Segoe UI\\', \\'Roboto\\', \\'Helvetica Neue\\', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 900px; margin: 0 auto; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border: 1px solid #e1e5e9;">' +
-                    '<div style="background: white; padding: 25px; border-radius: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.08);">' +
-                    html +
-                    '</div></div>';
+                // If we have DOCX preview active, clear it so it regenerates
+                if (currentFormat === 'docx') {
+                    resumeData.docx = null;
+                    generateDocxFromMarkdown();
+                }
             }
 
             function handleKeyPress(event) {
@@ -460,9 +691,10 @@ async def apply_quick_modification(session_id: str, modified_resume: str, user_q
             "timestamp": datetime.now().isoformat()
         }, session_id)
         
-        # Generate PDF from modified resume
+        # Generate PDF from modified resume using auto-fit generator
         print(f"Applying quick modification for session {session_id}: {user_query}")
-        pdf_base64 = pdf_generator.generate_pdf_base64(modified_resume)
+        pdf_base64 = pdf_generator.generate_auto_fit_pdf_base64(modified_resume)
+        docx_base64 = docx_generator.generate_auto_fit_docx_base64(modified_resume)
         
         if pdf_base64:
             print(f"Quick modification applied successfully, PDF size: {len(pdf_base64)} characters")
@@ -476,6 +708,17 @@ async def apply_quick_modification(session_id: str, modified_resume: str, user_q
                 "timestamp": datetime.now().isoformat(),
                 "modification_type": impact
             }, session_id)
+            
+            # Send updated DOCX if available
+            if docx_base64:
+                print(f"Quick DOCX modification applied, size: {len(docx_base64)} characters")
+                await manager.send_personal_message({
+                    "type": "resume_docx_update",
+                    "docx_base64": docx_base64,
+                    "session_id": session_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "modification_type": impact
+                }, session_id)
             
             # Send completion message
             await manager.send_personal_message({
@@ -526,14 +769,20 @@ async def generate_and_notify_resume(session_id: str, resume_data: ResumeData, u
             "timestamp": datetime.now().isoformat()
         }, session_id)
         
-        # Generate PDF from markdown using optimized generator
+        # Generate PDF from markdown using auto-fit generator
         print(f"Converting resume to PDF for session {session_id}")
-        pdf_base64 = pdf_generator.generate_pdf_base64(markdown)
+        pdf_base64 = pdf_generator.generate_auto_fit_pdf_base64(markdown)
         if pdf_base64:
-            print(f"Optimized PDF generated successfully, size: {len(pdf_base64)} characters")
+            print(f"Auto-fit PDF generated successfully, size: {len(pdf_base64)} characters")
         else:
             print("Failed to generate PDF")
             return
+        
+        # Also generate DOCX format using auto-fit generator
+        print(f"Converting resume to DOCX for session {session_id}")
+        docx_base64 = docx_generator.generate_auto_fit_docx_base64(markdown)
+        if docx_base64:
+            print(f"Auto-fit DOCX generated successfully, size: {len(docx_base64)} characters")
         
         # Update session with both markdown and PDF
         session_manager.update_resume_markdown(session_id, markdown)
@@ -547,10 +796,19 @@ async def generate_and_notify_resume(session_id: str, resume_data: ResumeData, u
             "timestamp": datetime.now().isoformat()
         }, session_id)
         
+        # Send DOCX update if generated successfully
+        if docx_base64:
+            await manager.send_personal_message({
+                "type": "resume_docx_update",
+                "docx_base64": docx_base64,
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat()
+            }, session_id)
+        
         # Send success message
         await manager.send_personal_message({
             "type": "chat_response",
-            "message": "✅ Your professional resume has been generated as a PDF! The A4 format is perfect for printing and will display consistently across all devices.",
+            "message": "✅ Your professional resume has been generated in both PDF and Word formats! Switch between tabs to view different formats. Both are perfect for job applications and ATS systems.",
             "session_id": session_id,
             "timestamp": datetime.now().isoformat()
         }, session_id)
@@ -610,6 +868,53 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             # Echo back or handle client messages if needed
     except WebSocketDisconnect:
         manager.disconnect(session_id)
+
+@app.post("/generate-docx")
+async def generate_docx_endpoint(request: DocxGenerationRequest):
+    """Generate DOCX from markdown"""
+    try:
+        # Validate session
+        session = session_manager.get_session(request.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Generate DOCX using auto-fit generator
+        print(f"Generating auto-fit DOCX for session {request.session_id}")
+        docx_base64 = docx_generator.generate_auto_fit_docx_base64(request.markdown)
+        
+        if docx_base64:
+            print(f"Auto-fit DOCX generated successfully, size: {len(docx_base64)} characters")
+            
+            # Send update via WebSocket
+            await manager.send_personal_message({
+                "type": "resume_docx_update",
+                "docx_base64": docx_base64,
+                "session_id": request.session_id,
+                "timestamp": datetime.now().isoformat()
+            }, request.session_id)
+            
+            return DocxResponse(
+                docx_base64=docx_base64,
+                session_id=request.session_id,
+                success=True
+            )
+        else:
+            print("Failed to generate DOCX")
+            return DocxResponse(
+                docx_base64=None,
+                session_id=request.session_id,
+                success=False,
+                error="Failed to generate DOCX document"
+            )
+    
+    except Exception as e:
+        print(f"Error in DOCX generation endpoint: {e}")
+        return DocxResponse(
+            docx_base64=None,
+            session_id=request.session_id,
+            success=False,
+            error=str(e)
+        )
 
 @app.get("/health")
 async def health_check():
