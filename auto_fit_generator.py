@@ -70,34 +70,34 @@ class AutoFitPdfGenerator:
         
         print(f"📊 Content Analysis: {density} density, {content_lines} content lines")
         
-        # Define scaling thresholds and factors
-        if content_lines <= 20:
-            # Short resume - normal fonts
+        # Define scaling thresholds and factors - MORE CONSERVATIVE!
+        if content_lines <= 35:
+            # Short to medium resume - keep normal fonts (FIXED!)
             scale_factor = 1.0
             size_class = "NORMAL"
-        elif content_lines <= 35:
-            # Medium resume - slightly smaller fonts
-            scale_factor = 0.9
-            size_class = "MEDIUM"
         elif content_lines <= 50:
-            # Long resume - smaller fonts
-            scale_factor = 0.8
+            # Medium resume - only slightly smaller fonts
+            scale_factor = 0.95
+            size_class = "MEDIUM"
+        elif content_lines <= 65:
+            # Long resume - moderate scaling
+            scale_factor = 0.85
             size_class = "COMPACT"
-        elif content_lines <= 70:
-            # Very long resume - much smaller fonts
-            scale_factor = 0.7
+        elif content_lines <= 80:
+            # Very long resume - more scaling
+            scale_factor = 0.75
             size_class = "DENSE"
         else:
-            # Extremely long resume - minimum readable fonts
-            scale_factor = 0.6
+            # Extremely long resume - maximum scaling
+            scale_factor = 0.65
             size_class = "ULTRA_DENSE"
         
         scaling = {
             'base_factor': scale_factor,
-            'h1_size': max(16, int(22 * scale_factor)),      # Name header: 22pt -> min 16pt
-            'h2_size': max(11, int(13 * scale_factor)),      # Section headers: 13pt -> min 11pt
-            'h3_size': max(10, int(11 * scale_factor)),      # Subsection: 11pt -> min 10pt
-            'body_size': max(8, int(11 * scale_factor)),     # Body text: 11pt -> min 8pt
+            'h1_size': max(14, int(16 * scale_factor)),      # Name header: 16pt -> min 14pt (SMALLER, more proportional!)
+            'h2_size': max(11, int(12 * scale_factor)),      # Section headers: 12pt -> min 11pt (SMALLER!)
+            'h3_size': max(10, int(11 * scale_factor)),      # Subsection: 11pt -> min 10pt (SMALLER!)
+            'body_size': max(10, int(12 * scale_factor)),     # Body text: 12pt -> min 10pt (unchanged)
             'small_size': max(7, int(9 * scale_factor)),     # Small text: 9pt -> min 7pt
             'contact_size': max(7, int(10 * scale_factor)),  # Contact: 10pt -> min 7pt
             'line_height': max(1.2, 1.4 * scale_factor),    # Line height: 1.4 -> min 1.2

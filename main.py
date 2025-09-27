@@ -32,6 +32,8 @@ from docx_generator import ProfessionalDocxGenerator
 from docx_generator_enhanced import EnhancedDocxGenerator
 from compact_docx_generator import CompactDocxGenerator
 from auto_fit_docx_generator import AutoFitDocxGenerator
+from configurable_autofit_generator import ConfigurableAutoFitGenerator
+from sensitivity_control_panel import SensitivityControlPanel
 from unified_parser import UnifiedResumeParser
 from resume_modifier import ResumeModifier
 
@@ -61,14 +63,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize services with AUTO-FIT generators - automatic font scaling for single-page layout
+# Initialize services with CONFIGURABLE AUTO-FIT generators - fully customizable font scaling
 session_manager = SessionManager()
 ai_orchestrator = AIAgentOrchestrator()
 resume_service = ResumeGenerationService(session_manager)
-pdf_generator = AutoFitPdfGenerator()        # AUTO-FIT PDF - dynamic font scaling for single-page
-docx_generator = AutoFitDocxGenerator()      # AUTO-FIT DOCX - adaptive sizing for Word documents
+
+# Create configurable auto-fit generators with customizable sensitivity
+def create_configurable_generators(sensitivity_level="balanced", custom_adjustments=None):
+    """
+    Create configurable auto-fit generators with customizable sensitivity
+    
+    Args:
+        sensitivity_level: 'conservative', 'balanced', or 'aggressive'
+        custom_adjustments: Optional dict with custom parameter adjustments
+    """
+    control_panel = SensitivityControlPanel()
+    control_panel.load_profile(sensitivity_level)
+    
+    # Apply custom adjustments if provided
+    if custom_adjustments:
+        control_panel.batch_adjust(custom_adjustments)
+        print(f"🎛️ Applied custom adjustments: {custom_adjustments}")
+    
+    return control_panel.create_generator()
+
+# Initialize with CONSERVATIVE sensitivity for better font sizes on short resumes!
+pdf_generator = create_configurable_generators(
+    sensitivity_level="conservative",   # CHANGED: More conservative for shorter resumes
+    custom_adjustments={
+        'scaling_sensitivity': 0.7,     # MUCH less aggressive scaling
+        'min_font_size': 9,             # Keep fonts readable (9pt minimum)
+        'short_resume_lines': 35,       # Only scale after 35 lines (most resumes won't hit this)
+        'medium_resume_lines': 50,      # Scale moderately after 50 lines
+        'long_resume_lines': 70,        # Scale more after 70 lines
+        'spacing_reduction': 0.9,       # Keep most spacing
+    }
+)
+
+docx_generator = create_configurable_generators(
+    sensitivity_level="conservative",   # CHANGED: More conservative 
+    custom_adjustments={
+        'scaling_sensitivity': 0.6,     # Even more conservative for DOCX
+        'min_font_size': 10,            # Larger minimum for Word (10pt)
+        'short_resume_lines': 40,       # Don't scale until 40 lines
+        'medium_resume_lines': 55,      # Scale moderately after 55 lines
+        'spacing_reduction': 0.95,      # Keep almost all spacing in DOCX
+    }
+)
+
+# For PDF generation, we'll use the auto-fit PDF generator
+pdf_only_generator = AutoFitPdfGenerator()  # Keep the PDF generator separate for now
+
 unified_parser = UnifiedResumeParser()      # For format conversion
 resume_modifier = ResumeModifier()
+
+print("🎛️ Initialized configurable auto-fit generators with custom sensitivity!")
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -691,10 +740,10 @@ async def apply_quick_modification(session_id: str, modified_resume: str, user_q
             "timestamp": datetime.now().isoformat()
         }, session_id)
         
-        # Generate PDF from modified resume using auto-fit generator
+        # Generate PDF and DOCX from modified resume using configurable generators
         print(f"Applying quick modification for session {session_id}: {user_query}")
-        pdf_base64 = pdf_generator.generate_auto_fit_pdf_base64(modified_resume)
-        docx_base64 = docx_generator.generate_auto_fit_docx_base64(modified_resume)
+        pdf_base64 = pdf_only_generator.generate_auto_fit_pdf_base64(modified_resume)
+        docx_base64 = docx_generator.generate_configurable_docx_base64(modified_resume)
         
         if pdf_base64:
             print(f"Quick modification applied successfully, PDF size: {len(pdf_base64)} characters")
@@ -771,16 +820,16 @@ async def generate_and_notify_resume(session_id: str, resume_data: ResumeData, u
         
         # Generate PDF from markdown using auto-fit generator
         print(f"Converting resume to PDF for session {session_id}")
-        pdf_base64 = pdf_generator.generate_auto_fit_pdf_base64(markdown)
+        pdf_base64 = pdf_only_generator.generate_auto_fit_pdf_base64(markdown)
         if pdf_base64:
             print(f"Auto-fit PDF generated successfully, size: {len(pdf_base64)} characters")
         else:
             print("Failed to generate PDF")
             return
         
-        # Also generate DOCX format using auto-fit generator
+        # Also generate DOCX format using configurable auto-fit generator
         print(f"Converting resume to DOCX for session {session_id}")
-        docx_base64 = docx_generator.generate_auto_fit_docx_base64(markdown)
+        docx_base64 = docx_generator.generate_configurable_docx_base64(markdown)
         if docx_base64:
             print(f"Auto-fit DOCX generated successfully, size: {len(docx_base64)} characters")
         
@@ -878,9 +927,9 @@ async def generate_docx_endpoint(request: DocxGenerationRequest):
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        # Generate DOCX using auto-fit generator
-        print(f"Generating auto-fit DOCX for session {request.session_id}")
-        docx_base64 = docx_generator.generate_auto_fit_docx_base64(request.markdown)
+        # Generate DOCX using configurable auto-fit generator
+        print(f"Generating configurable auto-fit DOCX for session {request.session_id}")
+        docx_base64 = docx_generator.generate_configurable_docx_base64(request.markdown)
         
         if docx_base64:
             print(f"Auto-fit DOCX generated successfully, size: {len(docx_base64)} characters")
