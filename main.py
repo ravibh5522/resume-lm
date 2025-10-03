@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from models import (
     ChatRequest, ChatResponse, ChatMessage, ChatRole, 
     ResumeData, SessionData, ResumeUpdateEvent,
-    DocxGenerationRequest, DocxResponse
+    DocxGenerationRequest, DocxResponse, FileAttachment
 )
 from session_manager import SessionManager
 from agents import AIAgentOrchestrator
@@ -36,6 +36,7 @@ from configurable_autofit_generator import ConfigurableAutoFitGenerator
 from sensitivity_control_panel import SensitivityControlPanel
 from unified_parser import UnifiedResumeParser
 from resume_modifier import ResumeModifier
+from file_processor import process_file_attachment, prepare_attachments_for_ai
 
 load_dotenv()
 
@@ -195,8 +196,27 @@ async def root():
             }
             .user-message { background: #e3f2fd; margin-left: 20px; }
             .assistant-message { background: #f3e5f5; margin-right: 20px; }
+            
+            /* Message Attachments */
+            .message-attachments {
+                margin-top: 8px;
+                padding-top: 8px;
+                border-top: 1px solid rgba(0,0,0,0.1);
+            }
+            .attachment-item {
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                background: rgba(0,0,0,0.05);
+                border-radius: 12px;
+                padding: 3px 8px;
+                margin: 2px;
+                font-size: 11px;
+                color: #666;
+            }
             .chat-input { 
                 display: flex; 
+                flex-direction: column;
                 gap: 10px; 
                 padding: 10px 0; 
                 position: sticky; 
@@ -204,6 +224,11 @@ async def root():
                 background: white; 
                 border-top: 1px solid #eee; 
                 margin-top: auto;
+            }
+            .input-row {
+                display: flex;
+                gap: 10px;
+                align-items: flex-end;
             }
             .chat-input input { 
                 flex: 1; 
@@ -227,6 +252,87 @@ async def root():
                 align-self: flex-end;
             }
             .chat-input button:hover { background: #1976d2; }
+            
+            /* File Upload Styles */
+            .file-upload-section {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                margin-bottom: 5px;
+            }
+            .file-input {
+                display: none;
+            }
+            .file-button {
+                padding: 8px 16px;
+                background: #4caf50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                transition: background 0.2s;
+            }
+            .file-button:hover {
+                background: #45a049;
+            }
+            .file-list {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                align-items: center;
+            }
+            .file-item {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                background: #e3f2fd;
+                border: 1px solid #2196f3;
+                border-radius: 20px;
+                padding: 4px 12px;
+                font-size: 12px;
+                color: #1976d2;
+            }
+            .file-item .remove-file {
+                background: none;
+                border: none;
+                color: #d32f2f;
+                cursor: pointer;
+                font-weight: bold;
+                font-size: 14px;
+                padding: 0;
+                margin-left: 5px;
+                border-radius: 50%;
+                width: 16px;
+                height: 16px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .file-item .remove-file:hover {
+                background: #ffebee;
+            }
+            .file-preview {
+                font-size: 11px;
+                color: #666;
+                margin-top: 3px;
+            }
+            .file-processing {
+                background: #fff3e0;
+                border: 1px solid #ff9800;
+                color: #f57c00;
+                padding: 8px 12px;
+                border-radius: 4px;
+                font-size: 13px;
+                margin-bottom: 8px;
+                display: none;
+            }
+            .file-processing.show {
+                display: block;
+            }
             
             /* Format Selection Tabs */
             .format-tabs {
@@ -302,8 +408,20 @@ async def root():
                 <div class="chat-container">
                     <div class="chat-messages" id="chatMessages"></div>
                     <div class="chat-input">
-                        <input type="text" id="messageInput" placeholder="Tell me about your work experience..." onkeypress="handleKeyPress(event)">
-                        <button onclick="sendMessage()">Send</button>
+                        <div class="file-processing" id="fileProcessing">
+                            🔄 Processing files...
+                        </div>
+                        <div class="file-upload-section">
+                            <input type="file" id="fileInput" class="file-input" multiple accept="image/*,.pdf" onchange="handleFileSelect(event)">
+                            <label for="fileInput" class="file-button">
+                                📎 Add Files
+                            </label>
+                            <div class="file-list" id="fileList"></div>
+                        </div>
+                        <div class="input-row">
+                            <input type="text" id="messageInput" placeholder="Tell me about your experience, or upload your resume..." onkeypress="handleKeyPress(event)">
+                            <button onclick="sendMessage()" id="sendButton">Send</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -348,11 +466,144 @@ async def root():
             let ws;
             let sessionId;
             let currentFormat = 'pdf';
+            let selectedFiles = [];
             let resumeData = {
                 pdf: null,
                 docx: null,
                 markdown: null
             };
+
+            // File handling functions
+            function handleFileSelect(event) {
+                const files = Array.from(event.target.files);
+                
+                for (const file of files) {
+                    // Validate file type
+                    if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
+                        alert(`File "${file.name}" is not a valid image or PDF file.`);
+                        continue;
+                    }
+                    
+                    // Check if file already selected
+                    if (selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
+                        continue;
+                    }
+                    
+                    selectedFiles.push(file);
+                }
+                
+                updateFileList();
+                event.target.value = ''; // Reset file input
+            }
+
+            function updateFileList() {
+                const fileList = document.getElementById('fileList');
+                fileList.innerHTML = '';
+                
+                selectedFiles.forEach((file, index) => {
+                    const fileItem = document.createElement('div');
+                    fileItem.className = 'file-item';
+                    
+                    const fileIcon = file.type.startsWith('image/') ? '🖼️' : '📄';
+                    const fileSizeKB = Math.round(file.size / 1024);
+                    
+                    fileItem.innerHTML = `
+                        ${fileIcon} ${file.name}
+                        <div class="file-preview">${fileSizeKB}KB</div>
+                        <button class="remove-file" onclick="removeFile(${index})" title="Remove file">×</button>
+                    `;
+                    
+                    fileList.appendChild(fileItem);
+                });
+            }
+
+            function removeFile(index) {
+                selectedFiles.splice(index, 1);
+                updateFileList();
+            }
+
+            async function processFilesForChat() {
+                if (selectedFiles.length === 0) return [];
+                
+                const attachments = [];
+                const processingIndicator = document.getElementById('fileProcessing');
+                
+                try {
+                    processingIndicator.classList.add('show');
+                    
+                    for (const file of selectedFiles) {
+                        const fileData = await readFileAsBase64(file);
+                        
+                        attachments.push({
+                            filename: file.name,
+                            file_type: file.type.startsWith('image/') ? 'image' : 'pdf',
+                            content: fileData.split(',')[1], // Remove data:type;base64, prefix
+                            mime_type: file.type,
+                            extracted_text: '' // Will be filled by backend
+                        });
+                    }
+                    
+                } catch (error) {
+                    console.error('Error processing files:', error);
+                    alert('Error processing files. Please try again.');
+                    return [];
+                } finally {
+                    processingIndicator.classList.remove('show');
+                }
+                
+                return attachments;
+            }
+
+            function readFileAsBase64(file) {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+            }
+
+            // Drag and drop functionality
+            function setupDragAndDrop() {
+                const chatContainer = document.querySelector('.chat-container');
+                
+                chatContainer.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    chatContainer.style.backgroundColor = '#f0f8ff';
+                    chatContainer.style.border = '2px dashed #2196f3';
+                });
+                
+                chatContainer.addEventListener('dragleave', (e) => {
+                    e.preventDefault();
+                    chatContainer.style.backgroundColor = '';
+                    chatContainer.style.border = '';
+                });
+                
+                chatContainer.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    chatContainer.style.backgroundColor = '';
+                    chatContainer.style.border = '';
+                    
+                    const files = Array.from(e.dataTransfer.files);
+                    
+                    for (const file of files) {
+                        // Validate file type
+                        if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
+                            alert(`File "${file.name}" is not a valid image or PDF file.`);
+                            continue;
+                        }
+                        
+                        // Check if file already selected
+                        if (selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
+                            continue;
+                        }
+                        
+                        selectedFiles.push(file);
+                    }
+                    
+                    updateFileList();
+                });
+            }
 
             // Initialize WebSocket connection
             function initWebSocket() {
@@ -488,53 +739,92 @@ async def root():
                 }
             }
 
-            function sendMessage() {
+            async function sendMessage() {
                 const input = document.getElementById('messageInput');
                 const message = input.value.trim();
-                if (message && ws && ws.readyState === WebSocket.OPEN) {
-                    addMessage(message, 'user');
+                const sendButton = document.getElementById('sendButton');
+                
+                if ((!message && selectedFiles.length === 0) || !ws || ws.readyState !== WebSocket.OPEN) {
+                    return;
+                }
+                
+                // Disable send button during processing
+                sendButton.disabled = true;
+                sendButton.textContent = 'Sending...';
+                
+                try {
+                    // Process attachments
+                    const attachments = await processFilesForChat();
                     
-                    fetch('/chat', {
+                    // Display user message with attachments
+                    addMessage(message || 'Shared files', 'user', attachments.map(a => a.filename));
+                    
+                    // Send to backend
+                    const chatRequest = {
+                        message: message || '',
+                        session_id: sessionId,
+                        attachments: attachments
+                    };
+                    
+                    const response = await fetch('/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: message, session_id: sessionId })
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        // Response will come via WebSocket
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                        addMessage('Error sending message. Please try again.', 'assistant');
+                        body: JSON.stringify(chatRequest)
                     });
                     
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    
+                    // Response will come via WebSocket
+                    
+                    // Clear input and files
                     input.value = '';
+                    selectedFiles = [];
+                    updateFileList();
+                    
+                } catch (error) {
+                    console.error('Error:', error);
+                    addMessage('Error sending message. Please try again.', 'assistant');
+                } finally {
+                    sendButton.disabled = false;
+                    sendButton.textContent = 'Send';
                     input.focus(); // Keep focus on input after sending
                 }
             }
 
-            function addMessage(message, role) {
+            function addMessage(message, role, attachments = []) {
                 const messagesDiv = document.getElementById('chatMessages');
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message ${role}-message`;
                 
+                let messageContent = '';
+                
                 if (role === 'status') {
-                    messageDiv.innerHTML = `<strong>Status:</strong> ${message}`;
+                    messageContent = `<strong>Status:</strong> ${message}`;
                     messageDiv.style.backgroundColor = '#e3f2fd';
                     messageDiv.style.color = '#1565c0';
                     messageDiv.style.fontStyle = 'italic';
                 } else {
-                    messageDiv.innerHTML = `<strong>${role === 'user' ? 'You' : 'AI'}:</strong> ${message}`;
+                    messageContent = `<strong>${role === 'user' ? 'You' : 'AI'}:</strong> ${message}`;
                 }
                 
+                // Add attachments display
+                if (attachments && attachments.length > 0) {
+                    messageContent += '<div class="message-attachments">';
+                    attachments.forEach(filename => {
+                        const icon = filename.toLowerCase().endsWith('.pdf') ? '📄' : '🖼️';
+                        messageContent += `<span class="attachment-item">${icon} ${filename}</span>`;
+                    });
+                    messageContent += '</div>';
+                }
+                
+                messageDiv.innerHTML = messageContent;
                 messagesDiv.appendChild(messageDiv);
                 
                 // Enhanced auto-scrolling with smooth behavior
                 setTimeout(() => {
-                    messagesDiv.scrollTo({
-                        top: messagesDiv.scrollHeight,
-                        behavior: 'smooth'
-                    });
+                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
                 }, 50);
             }
 
@@ -635,14 +925,11 @@ async def root():
                 }
             }
 
-            function handleKeyPress(event) {
-                if (event.key === 'Enter') {
-                    sendMessage();
-                }
-            }
-
             // Initialize when page loads
-            window.onload = initWebSocket;
+            window.onload = function() {
+                initWebSocket();
+                setupDragAndDrop();
+            };
         </script>
     </body>
     </html>
@@ -656,20 +943,69 @@ async def create_session():
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    """Handle chat messages"""
+    """Handle chat messages with optional file attachments (images and PDFs)"""
     try:
         # Get session
         session = session_manager.get_session(request.session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        # Add user message to session
-        user_message = ChatMessage(role=ChatRole.USER, content=request.message)
+        # Process file attachments if any
+        processed_attachments = []
+        attachment_context = ""
+        
+        if request.attachments:
+            print(f"📎 Processing {len(request.attachments)} attachments...")
+            
+            for attachment in request.attachments:
+                try:
+                    # Process the attachment (extract text from PDFs, validate images)
+                    processed_attachment = process_file_attachment(attachment)
+                    processed_attachments.append(processed_attachment)
+                    
+                except Exception as e:
+                    print(f"❌ Failed to process attachment {attachment.filename}: {e}")
+                    # Continue with other attachments, but notify user
+                    await manager.send_personal_message({
+                        "type": "error",
+                        "message": f"Failed to process file '{attachment.filename}': {str(e)}",
+                        "session_id": request.session_id,
+                        "timestamp": datetime.now().isoformat()
+                    }, request.session_id)
+            
+            # Prepare attachments for AI processing
+            if processed_attachments:
+                text_content, image_content = prepare_attachments_for_ai(processed_attachments)
+                attachment_context = "\n\n".join(text_content)
+                
+                # Send notification about processed files
+                await manager.send_personal_message({
+                    "type": "chat_response",
+                    "message": f"📎 Processed {len(processed_attachments)} files successfully!",
+                    "session_id": request.session_id,
+                    "timestamp": datetime.now().isoformat()
+                }, request.session_id)
+        
+        # Combine user message with attachment context
+        enhanced_message = request.message
+        if attachment_context:
+            # When PDF resume content is provided, enhance the message to indicate new data
+            if any(att.file_type == 'pdf' and att.extracted_text for att in processed_attachments):
+                enhanced_message = f"{request.message}\n\nPDF Resume Content:\n{attachment_context}"
+            else:
+                enhanced_message = f"{request.message}\n\nFile Content:\n{attachment_context}"
+        
+        # Add user message to session (with attachments)
+        user_message = ChatMessage(
+            role=ChatRole.USER, 
+            content=request.message,
+            attachments=processed_attachments
+        )
         session_manager.add_chat_message(request.session_id, user_message)
         
-        # CHECK FOR TARGETED MODIFICATIONS FIRST
+        # CHECK FOR TARGETED MODIFICATIONS FIRST (only if no attachments for now)
         existing_resume = session.resume_markdown
-        if existing_resume and resume_modifier.can_handle_modification(request.message, existing_resume):
+        if existing_resume and not processed_attachments and resume_modifier.can_handle_modification(request.message, existing_resume):
             # Handle as targeted modification without full regeneration
             impact = resume_modifier.estimate_change_impact(request.message)
             
@@ -700,9 +1036,9 @@ async def chat_endpoint(request: ChatRequest):
             return ChatResponse(message=response_text, session_id=request.session_id)
         
         # FALLBACK TO FULL AI PROCESSING
-        # Process with AI (pass existing session data for modification detection)
+        # Process with AI (use enhanced message with attachment context)
         response_text, resume_data = await ai_orchestrator.process_chat_message(
-            request.message, session.chat_history, session.user_data
+            enhanced_message, session.chat_history, session.user_data
         )
         
         # Add AI response to session

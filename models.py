@@ -8,10 +8,18 @@ class ChatRole(str, Enum):
     ASSISTANT = "assistant"
     SYSTEM = "system"
 
+class FileAttachment(BaseModel):
+    filename: str
+    file_type: str  # 'image' or 'pdf'
+    content: str    # base64 encoded content
+    mime_type: str  # e.g., 'image/jpeg', 'application/pdf'
+    extracted_text: Optional[str] = None  # For PDFs
+
 class ChatMessage(BaseModel):
     role: ChatRole
     content: str
     timestamp: datetime = Field(default_factory=datetime.now)
+    attachments: List[FileAttachment] = []
 
 class UserProfile(BaseModel):
     name: Optional[str] = None
@@ -33,7 +41,7 @@ class Experience(BaseModel):
 class Education(BaseModel):
     institution: str
     degree: str
-    field: str
+    field: Optional[str] = "General Studies"
     start_date: str
     end_date: Optional[str] = None
     gpa: Optional[str] = None
@@ -67,6 +75,7 @@ class SessionData(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     session_id: str
+    attachments: List[FileAttachment] = []
 
 class DocxGenerationRequest(BaseModel):
     markdown: str

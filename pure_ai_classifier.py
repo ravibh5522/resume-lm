@@ -44,7 +44,7 @@ class PureAIQueryClassifier:
             raise ValueError("Missing OPENAI_API_KEY or OPENAI_BASE_URL environment variables")
             
         self.client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        self.model = os.getenv("OPENAI_MODEL")
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4")
     
     async def classify_query(self, message: str, context: Optional[Dict] = None) -> AIQueryClassification:
         """Pure AI-powered query classification with enhanced prompting"""
@@ -81,6 +81,8 @@ CLASSIFICATION TYPES:
    - Listing skills and abilities
    - Describing projects or achievements
    - Any new factual information for the resume
+   - UPLOADING PDF RESUMES: When PDF content is attached, treat as new data source
+   - REWRITING RESUMES WITH ATTACHMENTS: PDF uploads for rewrite requests are data gathering
    
 4. RESUME_GENERATION: Ready to create/recreate resume
    - Explicit requests to generate resume
@@ -142,6 +144,16 @@ User: "I worked at Google for 3 years as a software engineer"
   "intent_description": "User is providing new work experience information",
   "suggested_action": "Extract and store the employment data: Google, Software Engineer, 3 years",
   "reasoning": "User is sharing factual employment information to be added to resume"
+}}
+
+User: "rewrite my resume" + PDF Resume Content: [extensive resume text]
+{{
+  "query_type": "data_gathering",
+  "confidence": 0.98,
+  "categories": ["pdf_upload", "resume_rewrite", "existing_resume"],
+  "intent_description": "User wants resume rewritten using provided PDF resume as data source",
+  "suggested_action": "Process the PDF resume content as new data source and rewrite accordingly",
+  "reasoning": "PDF resume content provides substantial new data that should be processed as data gathering, even though 'rewrite' might suggest content update. The attachment contains the primary data source."
 }}
 
 User: "make headers blue and add my Apple experience"

@@ -28,7 +28,7 @@ class OpenAIClient:
             api_key=api_key,
             base_url=base_url
         )
-        self.model = os.getenv("OPENAI_MODEL")
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4")
     
     async def get_completion(self, messages: List[Dict[str, Any]], temperature: float = 0.7) -> str:
         """Get completion from OpenAI API (legacy method for resume generation)"""
@@ -47,6 +47,17 @@ class OpenAIClient:
     def get_parsed_completion(self, messages, response_format):
         """Get completion with structured output using response.parsed"""
         try:
+            # Azure OpenAI requires 'json' in messages when using structured output
+            # Add json instruction to system message if not present
+            if messages and messages[0]["role"] == "system":
+                if "json" not in messages[0]["content"].lower():
+                    messages[0]["content"] += "\n\nPlease provide your response in JSON format."
+            else:
+                messages.insert(0, {
+                    "role": "system", 
+                    "content": "Please provide your response in JSON format as specified."
+                })
+            
             response = self.client.chat.completions.parse(
                 model=self.model,  # Use the configured model
                 messages=messages,
@@ -55,14 +66,32 @@ class OpenAIClient:
             return response.choices[0].message.parsed
         except Exception as e:
             print(f"OpenAI parsed API error: {e}")
-            # Fallback to JSON mode
-            response = self.client.chat.completions.create(
-                model=self.model,  # Use the configured model
-                messages=messages,
-                response_format={"type": "json_object"}
-            )
-            import json
-            return json.loads(response.choices[0].message.content or "{}")
+            # Enhanced fallback to JSON mode with explicit json instruction
+            try:
+                # Ensure json instruction is in messages
+                fallback_messages = messages.copy()
+                if fallback_messages and fallback_messages[0]["role"] == "system":
+                    if "json" not in fallback_messages[0]["content"].lower():
+                        fallback_messages[0]["content"] += "\n\nIMPORTANT: Respond with valid JSON format only."
+                else:
+                    fallback_messages.insert(0, {
+                        "role": "system", 
+                        "content": "Respond with valid JSON format only."
+                    })
+                
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=fallback_messages,
+                    response_format={"type": "json_object"}
+                )
+                content = response.choices[0].message.content
+                if content:
+                    import json
+                    return json.loads(content)
+                return None
+            except Exception as fallback_error:
+                print(f"Error with parsed response: {fallback_error}")
+                return None
     
     async def get_structured_completion(self, messages: List[Dict[str, Any]], schema_description: str, temperature: float = 0.7):
         """Get structured completion using JSON mode with schema instructions (fallback)"""
@@ -107,8 +136,17 @@ If the user already has resume data (shown in context), YOU MUST PRESERVE ALL EX
 When making modifications:
 1. ALWAYS include ALL existing data in your response
 2. Only change the specific fields requested by the user
-3. Never return empty arrays or null values for existing data
+3. Never return empty arrays or null values for existing data UNLESS user specifically asks to REMOVE/DELETE a section
 4. Preserve experience entries, education, skills, projects, certifications, languages
+
+SPECIAL HANDLING FOR REMOVAL REQUESTS:
+When user asks to "remove", "delete", "take out" a section (e.g., "remove languages", "delete certifications"):
+- Return an EMPTY ARRAY [] for that specific section
+- Keep all other existing data intact
+- Examples:
+  * "remove languages" → languages: []
+  * "delete certifications" → certifications: []
+  * "remove all projects" → projects: []
 
 CONVERSATION FLOW:
 1. Ask targeted questions to collect user information
@@ -256,7 +294,7 @@ IMPORTANT: Only modify the specific fields mentioned by the user. Keep all other
                     if existing_resume_data:
                         final_resume_data = self._merge_resume_data(existing_resume_data, collected_data)
                     else:
-                        # Convert StructuredResumeData to ResumeData
+                        # Convert StructuredResumeData to ResumeData with validation
                         final_resume_data = ResumeData(
                             profile=collected_data.profile,
                             summary=collected_data.summary,
@@ -365,23 +403,23 @@ IMPORTANT: Only modify the specific fields mentioned by the user. Keep all other
         if new_data.summary and new_data.summary.strip():
             merged.summary = new_data.summary
             
-        # For lists, only update if new data is provided
-        if new_data.experience and len(new_data.experience) > 0:
+        # For lists, update if new data is provided (including empty lists for removal)
+        if new_data.experience is not None:
             merged.experience = new_data.experience
             
-        if new_data.education and len(new_data.education) > 0:
+        if new_data.education is not None:
             merged.education = new_data.education
             
-        if new_data.skills and len(new_data.skills) > 0:
+        if new_data.skills is not None:
             merged.skills = new_data.skills
             
-        if new_data.projects and len(new_data.projects) > 0:
+        if new_data.projects is not None:
             merged.projects = new_data.projects
             
-        if new_data.certifications and len(new_data.certifications) > 0:
+        if new_data.certifications is not None:
             merged.certifications = new_data.certifications
             
-        if new_data.languages and len(new_data.languages) > 0:
+        if new_data.languages is not None:
             merged.languages = new_data.languages
         
         return merged
@@ -471,12 +509,15 @@ IMPORTANT: The markdown_resume field should contain ONLY pure markdown content w
                 messages, ResumeGeneratorResponse
             )
             
-            if structured_response and hasattr(structured_response, 'markdown_resume'):
+            if structured_response and hasattr(structured_response, 'markdown_resume') and structured_response.markdown_resume:
                 return structured_response.markdown_resume
             else:
-                # Fallback to legacy method if structured response fails
-                print("⚠️ Structured output failed, using fallback method")
-                return await self.openai_client.get_completion(messages, temperature=0.2)
+                # Try to parse as dict if structured response format differs
+                if isinstance(structured_response, dict) and 'markdown_resume' in structured_response:
+                    return structured_response['markdown_resume']
+                else:
+                    print(f"⚠️ Structured output failed or empty, using fallback method. Response: {structured_response}")
+                    return await self.openai_client.get_completion(messages, temperature=0.2)
                 
         except Exception as e:
             print(f"⚠️ Resume generation error: {e}, using fallback method")
@@ -677,20 +718,35 @@ class AIAgentOrchestrator:
         
         print(f"� Pure AI classified as: {classification.query_type.value} (confidence: {classification.confidence:.2f})")
         
-        # Route based on intelligent classification - ALL requests go through data gathering agent
-        # The agent will handle the actual logic and responses properly
-        response_text, resume_data = await self.data_gathering_agent.process_message(message, chat_history, existing_resume_data)
-        
-        if resume_data:
-            # Clean up the response if it contains old-style markers
-            if "READY_TO_GENERATE_RESUME:" in response_text:
-                clean_response = response_text.split("READY_TO_GENERATE_RESUME:")[0].strip()
-                if not clean_response:
-                    clean_response = "Great! I have all the information I need. I'm now generating your professional resume."
-                return clean_response, resume_data
+        # Route based on intelligent classification
+        if classification.query_type == QueryType.RESUME_GENERATION:
+            # Generate resume with existing data
+            if existing_resume_data and self._assess_data_completeness(existing_resume_data) > 0.7:
+                return "Generating your professional resume now...", existing_resume_data
+            else:
+                # Need more data, route to data gathering
+                response_text, resume_data = await self.data_gathering_agent.process_message(message, chat_history, existing_resume_data)
+                return response_text, resume_data
+                
+        elif classification.query_type == QueryType.CONTENT_UPDATE:
+            # Handle content updates through data gathering agent
+            response_text, resume_data = await self.data_gathering_agent.process_message(message, chat_history, existing_resume_data)
             return response_text, resume_data
-        
-        return response_text, None
+            
+        else:  # DATA_GATHERING or any other type
+            # Default to data gathering agent
+            response_text, resume_data = await self.data_gathering_agent.process_message(message, chat_history, existing_resume_data)
+            
+            if resume_data:
+                # Clean up the response if it contains old-style markers
+                if "READY_TO_GENERATE_RESUME:" in response_text:
+                    clean_response = response_text.split("READY_TO_GENERATE_RESUME:")[0].strip()
+                    if not clean_response:
+                        clean_response = "Great! I have all the information I need. I'm now generating your professional resume."
+                    return clean_response, resume_data
+                return response_text, resume_data
+            
+            return response_text, None
     
     def _assess_data_completeness(self, resume_data: ResumeData) -> float:
         """Assess how complete the resume data is (0.0 to 1.0)"""
