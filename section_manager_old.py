@@ -140,4 +140,4 @@ class SectionManager:
             return "Project details"
         
         else:
-            return str(raw_content)\n
+            return str(raw_content)

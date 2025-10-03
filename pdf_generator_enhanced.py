@@ -228,7 +228,8 @@ class EnhancedPdfGenerator:
         # Debug print to see what we're sending to markdown processor
         print(f"📋 Enhanced preprocessing result preview:")
         print(f"   First 300 chars: {result[:300]}...")
-        print(f"   Contains ## headers: {bool(re.search(r'^##\s+', result, re.MULTILINE))}")
+        header_pattern = r'^##\s+'
+        print(f"   Contains ## headers: {bool(re.search(header_pattern, result, re.MULTILINE))}")
         
         return result
     

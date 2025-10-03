@@ -32,7 +32,8 @@ Built various applications"""
     print("🔍 Header Parsing Comparison Test")
     print("=" * 60)
     print(f"📝 Test Markdown:")
-    print(f"   Contains {len(re.findall(r'^##\\s+', test_markdown, re.MULTILINE))} '##' headers")
+    header_pattern = r'^##\s+'
+    print(f"   Contains {len(re.findall(header_pattern, test_markdown, re.MULTILINE))} '##' headers")
     print()
     
     try:
